@@ -7,7 +7,6 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -42,33 +41,6 @@ public class AppServlet extends HttpServlet {
   public void init() throws ServletException {
     configureTemplateEngine();
     connectToDatabase();
-    migratePasswordToHash();
-  }
-
-  void migratePasswordToHash() {
-    try (Statement queryStatement = database.createStatement()) {
-      ResultSet results = queryStatement.executeQuery(
-          "SELECT id, password, password_hash, password_salt FROM user");
-      while (results.next()) {
-        String id = results.getString("id");
-        String passwordHash = results.getString("password_hash");
-        String passwordSalt = results.getString("password_salt");
-
-        if (passwordHash == null || passwordSalt == null) {
-          byte[] rawPasswordSalt = hasher.generateSalt();
-          passwordHash = hasher.hash(results.getString("password"), rawPasswordSalt);
-
-          PreparedStatement updateStatement = database.prepareStatement(
-              "UPDATE user SET password_hash=?, password_salt=? WHERE id=?");
-          updateStatement.setString(1, passwordHash);
-          updateStatement.setString(2, hasher.encodeSalt(rawPasswordSalt));
-          updateStatement.setString(3, id);
-          updateStatement.executeUpdate();
-        }
-      }
-    } catch (SQLException e) {
-      throw new RuntimeException(e);
-    }
   }
 
   private void configureTemplateEngine() throws ServletException {
