@@ -29,16 +29,43 @@ import java.sql.PreparedStatement;
 public class AppServlet extends HttpServlet {
 
   private static final String CONNECTION_URL = "jdbc:sqlite:db.sqlite3";
-  private static final String AUTH_QUERY = "select * from user where username=? and password=?"; // fixes for 1.1
-  private static final String SEARCH_QUERY = "select * from patient where surname=? collate nocase"; // fixes for 1.1
+  private static final String AUTH_QUERY = "select password_salt, password_hash from user where username=?"; // fixes for 1.1
+  private static final String SEARCH_QUERY = "select * from patient where surname=? collate nocase"; // fixes for 1.2
 
   private final Configuration fm = new Configuration(Configuration.VERSION_2_3_28);
   private Connection database;
+
+  private final PasswordHasher hasher = new PasswordHasher();
 
   @Override
   public void init() throws ServletException {
     configureTemplateEngine();
     connectToDatabase();
+    migratePasswordToHash();
+  }
+
+  void migratePasswordToHash() {
+    try (Statement queryStatement = database.createStatement()) {
+      ResultSet results = queryStatement.executeQuery("SELECT id, password, password_hash, password_salt FROM user");
+      while (results.next()) {
+        String id = results.getString("id");
+        String passwordHash = results.getString("password_hash");
+        String passwordSalt = results.getString("password_salt");
+
+        if (passwordHash == null || passwordSalt == null) {
+          byte[] rawPasswordSalt = hasher.generateSalt();
+          passwordHash = hasher.hash(results.getString("password"), rawPasswordSalt);
+
+          PreparedStatement updateStatement = database.prepareStatement("UPDATE user SET password_hash=?, password_salt=? WHERE id=?");
+          updateStatement.setString(1, passwordHash);
+          updateStatement.setString(2, hasher.encodeSalt(rawPasswordSalt));
+          updateStatement.setString(3, id);
+          updateStatement.executeUpdate();
+        }
+      }
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   private void configureTemplateEngine() throws ServletException {
@@ -109,14 +136,17 @@ public class AppServlet extends HttpServlet {
   private boolean authenticated(String username, String password) throws SQLException {
     try (PreparedStatement stmt = database.prepareStatement(AUTH_QUERY)) {
       stmt.setString(1, username);
-      stmt.setString(2, password);
-      
+
       ResultSet results = stmt.executeQuery();
-      return results.next();
+
+      byte[] salt = hasher.decodeSalt(results.getString("password_salt"));
+      String hash = hasher.hash(password, salt);
+
+      return hash.equals(results.getString("password_hash"));
     }
   }
 
-  // fixes for 1.1 (using preparedStatement)
+  // fixes for 1.2 (using preparedStatement)
   private List<Record> searchResults(String surname) throws SQLException {
     List<Record> records = new ArrayList<>();
     try (PreparedStatement stmt = database.prepareStatement(SEARCH_QUERY)) {
